@@ -1,7 +1,6 @@
 services:
   actual-ical:
     build: .
-    # * Alternatively, use pre-built image: image: ghcr.io/guitarbeat/actual-ical
     ports:
       - "3000:3000"
     environment:

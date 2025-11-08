@@ -21,11 +21,96 @@ if (!ACTUAL_SERVER || !ACTUAL_MAIN_PASSWORD || !ACTUAL_SYNC_ID) {
   throw new Error('Missing ACTUAL_SERVER, ACTUAL_MAIN_PASSWORD or ACTUAL_SYNC_ID')
 }
 
+// * Extract error message from multiple sources
+const extractErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message || error.stack || String(error)
+  }
+  
+  if (typeof error === 'object' && error !== null) {
+    const errorObj = error as Record<string, unknown>
+    // * Check common error properties
+    if (errorObj.message && typeof errorObj.message === 'string') {
+      return errorObj.message
+    }
+    if (errorObj.stack && typeof errorObj.stack === 'string') {
+      return errorObj.stack
+    }
+    if (errorObj.reason && typeof errorObj.reason === 'string') {
+      return errorObj.reason
+    }
+  }
+  
+  return String(error)
+}
+
+// * Extract error stack trace if available
+const extractErrorStack = (error: unknown): string | undefined => {
+  if (error instanceof Error && error.stack) {
+    return error.stack
+  }
+  
+  if (typeof error === 'object' && error !== null) {
+    const errorObj = error as Record<string, unknown>
+    if (errorObj.stack && typeof errorObj.stack === 'string') {
+      return errorObj.stack
+    }
+  }
+  
+  return undefined
+}
+
+// * Check if error is migration-related by checking multiple sources
+const isMigrationError = (error: unknown): boolean => {
+  const errorMessage = extractErrorMessage(error).toLowerCase()
+  const errorStack = extractErrorStack(error)?.toLowerCase() || ''
+  const combinedText = `${errorMessage} ${errorStack}`
+  
+  const migrationKeywords = [
+    'out-of-sync-migrations',
+    'migration',
+    'timestamp',
+    'database is out of sync',
+    'appliedids',
+    'available',
+  ]
+  
+  return migrationKeywords.some(keyword => combinedText.includes(keyword.toLowerCase()))
+}
+
+// * Track if we're currently handling a migration error to prevent infinite loops
+let isHandlingMigrationError = false
+
 // Actual SDK throws unhandled exceptions on downloadBudget if the SyncID is wrong, which breaks the app
 // This should be fixed on Actual SDK side, but for now we can just ignore unhandled exceptions
 // This may hide other issues, but it's better than breaking the app
 process.on('uncaughtException', (error) => {
-  logger.error('Unhandled exception', error)
+  const errorMessage = extractErrorMessage(error)
+  const errorStack = extractErrorStack(error)
+  const errorType = error?.constructor?.name || typeof error
+  
+  logger.error({ 
+    error,
+    errorMessage,
+    errorStack,
+    errorType,
+    errorProperties: typeof error === 'object' && error !== null ? Object.keys(error) : [],
+    isMigrationError: isMigrationError(error),
+  }, 'Unhandled exception')
+  
+  // * If it's a migration error and we haven't handled it yet, try to clear cache
+  if (isMigrationError(error) && !isHandlingMigrationError && CLEAR_CACHE_ON_ERROR === 'true') {
+    isHandlingMigrationError = true
+    logger.warn('Migration error detected in uncaught exception, clearing cache...')
+    try {
+      clearCache()
+      logger.info('Cache cleared successfully from uncaught exception handler')
+    } catch (clearError) {
+      logger.error({ clearError }, 'Failed to clear cache from uncaught exception handler')
+    } finally {
+      isHandlingMigrationError = false
+    }
+  }
 })
 
 const clearCache = () => {
@@ -64,7 +149,6 @@ const getSchedules = async (retryOnMigrationError = true) => {
     logger.debug('Querying schedules')
     const query = actualApi.q('schedules')
       .filter({
-        completed: false,
         tombstone: false,
       })
       .select(['*'])
@@ -73,24 +157,37 @@ const getSchedules = async (retryOnMigrationError = true) => {
 
     return data
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    const isMigrationError = errorMessage.includes('out-of-sync-migrations') || 
-                            errorMessage.includes('migration') ||
-                            errorMessage.includes('timestamp')
+    const errorMessage = extractErrorMessage(error)
+    const errorStack = extractErrorStack(error)
+    const errorType = error?.constructor?.name || typeof error
+    const migrationErrorDetected = isMigrationError(error)
 
     logger.error({ 
-      error, 
+      error,
       errorMessage,
-      isMigrationError,
+      errorStack,
+      errorType,
+      errorProperties: typeof error === 'object' && error !== null ? Object.keys(error) : [],
+      isMigrationError: migrationErrorDetected,
       retryOnMigrationError,
       clearCacheOnError: CLEAR_CACHE_ON_ERROR,
     }, 'Error fetching schedules')
 
     // * If it's a migration error and we haven't retried yet, clear cache and retry
-    if (isMigrationError && retryOnMigrationError && CLEAR_CACHE_ON_ERROR === 'true') {
+    if (migrationErrorDetected && retryOnMigrationError && CLEAR_CACHE_ON_ERROR === 'true') {
       logger.warn('Migration sync error detected, clearing cache and retrying...')
-      clearCache()
-      return getSchedules(false)
+      isHandlingMigrationError = true
+      try {
+        clearCache()
+        logger.info('Cache cleared successfully, retrying...')
+        return getSchedules(false)
+      } catch (clearError) {
+        logger.error({ clearError }, 'Failed to clear cache during retry')
+        isHandlingMigrationError = false
+        throw new Error(`Failed to fetch schedules: ${extractErrorMessage(error)} (cache clear also failed: ${extractErrorMessage(clearError)})`)
+      } finally {
+        isHandlingMigrationError = false
+      }
     }
 
     throw new Error(`Failed to fetch schedules: ${errorMessage}`)
