@@ -83,6 +83,8 @@ const isMigrationError = (error: unknown): boolean => {
     'database is out of sync',
     'appliedids',
     'available',
+    'error updating',  // From the logs: "Error updating Error: out-of-sync-migrations"
+    'migrate',  // Migration function calls
   ]
 
   return migrationKeywords.some(keyword => combinedText.includes(keyword.toLowerCase()))
@@ -93,6 +95,7 @@ const categorizeError = (error: unknown): string => {
   const errorMessage = extractErrorMessage(error).toLowerCase()
   const errorStack = extractErrorStack(error)?.toLowerCase() || ''
 
+  // * Check for migration errors first, since they're most common
   if (isMigrationError(error)) {
     return 'MIGRATION_ERROR'
   }
@@ -113,7 +116,9 @@ const categorizeError = (error: unknown): string => {
     return 'SERVER_URL_ERROR'
   }
 
-  if (errorStack.includes('download-budget') || errorStack.includes('downloadbudget')) {
+  // * Check for budget download errors (this is where migration errors often manifest)
+  if (errorStack.includes('download-budget') || errorStack.includes('downloadbudget') ||
+      errorMessage.includes('download-budget') || errorMessage.includes('downloadbudget')) {
     return 'BUDGET_DOWNLOAD_ERROR'
   }
 
@@ -272,7 +277,7 @@ const getSchedules = async (retryOnMigrationError = true) => {
         userFriendlyMessage = 'Failed to download budget data. This could be a server issue or corrupted cache.'
         break
       case 'MIGRATION_ERROR':
-        userFriendlyMessage = 'Database migration issue detected. Cache will be cleared and retried automatically.'
+        userFriendlyMessage = 'Database version mismatch detected. This usually happens when the Actual server and client are on different versions. Cache will be cleared and retried automatically.'
         break
       default:
         userFriendlyMessage = `Connection error: ${errorMessage || 'Unknown error occurred'}`
