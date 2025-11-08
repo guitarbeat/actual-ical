@@ -26,7 +26,7 @@ const extractErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
     return error.message || error.stack || String(error)
   }
-  
+
   if (typeof error === 'object' && error !== null) {
     const errorObj = error as Record<string, unknown>
     // * Check common error properties
@@ -39,8 +39,18 @@ const extractErrorMessage = (error: unknown): string => {
     if (errorObj.reason && typeof errorObj.reason === 'string') {
       return errorObj.reason
     }
+    // * Check for other common error properties from APIs
+    if (errorObj.error && typeof errorObj.error === 'string') {
+      return errorObj.error
+    }
+    if (errorObj.code && typeof errorObj.code === 'string') {
+      return errorObj.code
+    }
+    if (errorObj.details && typeof errorObj.details === 'string') {
+      return errorObj.details
+    }
   }
-  
+
   return String(error)
 }
 
@@ -65,7 +75,7 @@ const isMigrationError = (error: unknown): boolean => {
   const errorMessage = extractErrorMessage(error).toLowerCase()
   const errorStack = extractErrorStack(error)?.toLowerCase() || ''
   const combinedText = `${errorMessage} ${errorStack}`
-  
+
   const migrationKeywords = [
     'out-of-sync-migrations',
     'migration',
@@ -74,8 +84,40 @@ const isMigrationError = (error: unknown): boolean => {
     'appliedids',
     'available',
   ]
-  
+
   return migrationKeywords.some(keyword => combinedText.includes(keyword.toLowerCase()))
+}
+
+// * Categorize error type for better diagnostics
+const categorizeError = (error: unknown): string => {
+  const errorMessage = extractErrorMessage(error).toLowerCase()
+  const errorStack = extractErrorStack(error)?.toLowerCase() || ''
+
+  if (isMigrationError(error)) {
+    return 'MIGRATION_ERROR'
+  }
+
+  if (errorMessage.includes('network') || errorMessage.includes('connection') || errorMessage.includes('timeout')) {
+    return 'NETWORK_ERROR'
+  }
+
+  if (errorMessage.includes('auth') || errorMessage.includes('password') || errorMessage.includes('credential')) {
+    return 'AUTHENTICATION_ERROR'
+  }
+
+  if (errorMessage.includes('sync') && errorMessage.includes('id')) {
+    return 'SYNC_ID_ERROR'
+  }
+
+  if (errorMessage.includes('server') && (errorMessage.includes('url') || errorMessage.includes('host'))) {
+    return 'SERVER_URL_ERROR'
+  }
+
+  if (errorStack.includes('download-budget') || errorStack.includes('downloadbudget')) {
+    return 'BUDGET_DOWNLOAD_ERROR'
+  }
+
+  return 'UNKNOWN_ERROR'
 }
 
 // * Track if we're currently handling a migration error to prevent infinite loops
@@ -134,19 +176,27 @@ const getSchedules = async (retryOnMigrationError = true) => {
       mkdirSync(ACTUAL_PATH, { recursive: true })
     }
 
-    logger.debug({ serverURL: ACTUAL_SERVER, syncId: ACTUAL_SYNC_ID }, 'Initializing Actual API')
+    logger.info({
+      serverURL: ACTUAL_SERVER,
+      syncId: ACTUAL_SYNC_ID ? ACTUAL_SYNC_ID.substring(0, 8) + '...' : undefined,
+      cachePath: ACTUAL_PATH,
+      hasSyncPassword: !!ACTUAL_SYNC_PASSWORD
+    }, 'Initializing Actual API connection')
+
     await actualApi.init({
       dataDir: ACTUAL_PATH,
       serverURL: ACTUAL_SERVER,
       password: ACTUAL_MAIN_PASSWORD,
     })
+    logger.debug('Actual API initialized successfully')
 
-    logger.debug('Downloading budget')
+    logger.info('Downloading budget data...')
     await actualApi.downloadBudget(ACTUAL_SYNC_ID, {
       password: ACTUAL_SYNC_PASSWORD,
     })
+    logger.debug('Budget downloaded successfully')
 
-    logger.debug('Querying schedules')
+    logger.debug('Querying schedules from database')
     const query = actualApi.q('schedules')
       .filter({
         tombstone: false,
@@ -154,6 +204,7 @@ const getSchedules = async (retryOnMigrationError = true) => {
       .select(['*'])
 
     const { data } = await actualApi.runQuery(query) as { data: ScheduleEntity[] }
+    logger.info({ scheduleCount: data.length }, 'Successfully retrieved schedules')
 
     return data
   } catch (error) {
@@ -161,16 +212,27 @@ const getSchedules = async (retryOnMigrationError = true) => {
     const errorStack = extractErrorStack(error)
     const errorType = error?.constructor?.name || typeof error
     const migrationErrorDetected = isMigrationError(error)
+    const errorCategory = categorizeError(error)
 
-    logger.error({ 
+    // * Log detailed error information
+    logger.error({
       error,
       errorMessage,
       errorStack,
       errorType,
+      errorCategory,
       errorProperties: typeof error === 'object' && error !== null ? Object.keys(error) : [],
       isMigrationError: migrationErrorDetected,
       retryOnMigrationError,
       clearCacheOnError: CLEAR_CACHE_ON_ERROR,
+      environment: {
+        ACTUAL_SERVER: ACTUAL_SERVER ? 'SET' : 'MISSING',
+        ACTUAL_MAIN_PASSWORD: ACTUAL_MAIN_PASSWORD ? 'SET' : 'MISSING',
+        ACTUAL_SYNC_ID: ACTUAL_SYNC_ID ? 'SET' : 'MISSING',
+        ACTUAL_SYNC_PASSWORD: ACTUAL_SYNC_PASSWORD ? 'SET' : 'MISSING',
+        ACTUAL_PATH,
+        NODE_ENV: process.env.NODE_ENV,
+      }
     }, 'Error fetching schedules')
 
     // * If it's a migration error and we haven't retried yet, clear cache and retry
@@ -190,7 +252,33 @@ const getSchedules = async (retryOnMigrationError = true) => {
       }
     }
 
-    throw new Error(`Failed to fetch schedules: ${errorMessage}`)
+    // * Provide user-friendly error message based on error category
+    let userFriendlyMessage = `Failed to fetch schedules: ${errorMessage}`
+
+    switch (errorCategory) {
+      case 'NETWORK_ERROR':
+        userFriendlyMessage = 'Network connection failed. Check if your remote server can reach the Actual Budget server.'
+        break
+      case 'AUTHENTICATION_ERROR':
+        userFriendlyMessage = 'Authentication failed. Check your ACTUAL_MAIN_PASSWORD and ACTUAL_SYNC_PASSWORD.'
+        break
+      case 'SYNC_ID_ERROR':
+        userFriendlyMessage = 'Invalid Sync ID. Check your ACTUAL_SYNC_ID setting.'
+        break
+      case 'SERVER_URL_ERROR':
+        userFriendlyMessage = 'Server URL issue. Check your ACTUAL_SERVER URL and ensure it\'s accessible.'
+        break
+      case 'BUDGET_DOWNLOAD_ERROR':
+        userFriendlyMessage = 'Failed to download budget data. This could be a server issue or corrupted cache.'
+        break
+      case 'MIGRATION_ERROR':
+        userFriendlyMessage = 'Database migration issue detected. Cache will be cleared and retried automatically.'
+        break
+      default:
+        userFriendlyMessage = `Connection error: ${errorMessage || 'Unknown error occurred'}`
+    }
+
+    throw new Error(userFriendlyMessage)
   }
 }
 
