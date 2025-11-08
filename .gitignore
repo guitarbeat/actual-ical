@@ -2,3 +2,4 @@ node_modules
 .actual-cache
 dist
 .env
+.enforcer

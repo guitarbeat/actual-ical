@@ -14,6 +14,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# * Install wget for healthcheck
+RUN apk add --no-cache wget
+
 COPY package*.json .
 RUN npm ci --only=production
 

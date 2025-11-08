@@ -1,0 +1,19 @@
+services:
+  actual-ical:
+    build: .
+    # * Alternatively, use pre-built image: image: ghcr.io/guitarbeat/actual-ical
+    ports:
+      - "3000:3000"
+    environment:
+      ACTUAL_SERVER: http://actual.alw.lol
+      ACTUAL_MAIN_PASSWORD: ninI0112@
+      ACTUAL_SYNC_ID: 7a78ae61-a6ee-4ddb-9c3a-c16a0af22d35
+      SYNC_ID_AS_URL: "true"
+      PORT: "3000"
+    volumes:
+      - actual-ical:/app/.actual-cache
+    restart: unless-stopped
+
+volumes:
+  actual-ical:
+
