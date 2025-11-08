@@ -128,6 +128,18 @@ export const generateIcal = async () => {
   // A method is required for outlook to display event as an invitation
   calendar.method(ICalCalendarMethod.REQUEST)
 
+  // * If no schedules, add a placeholder event to make the calendar valid and informative
+  if (schedules.length === 0) {
+    calendar.createEvent({
+      start: today.toJSDate(),
+      summary: 'No scheduled transactions found',
+      description: 'You don\'t have any active scheduled transactions in Actual. Add some schedules in Actual to see them here.',
+      allDay: true,
+      timezone: TZ,
+    })
+    return { calendarString: calendar.toString(), scheduleCount: 0 }
+  }
+
   for (const schedule of schedules) {
     logger.debug(schedule, 'Processing Schedule')
     const recurringData = schedule._date
@@ -284,5 +296,5 @@ export const generateIcal = async () => {
       })
   }
 
-  return calendar.toString()
+  return { calendarString: calendar.toString(), scheduleCount: schedules.length }
 }
