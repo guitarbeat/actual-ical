@@ -55,19 +55,20 @@ Then you can access the iCal feed at `http://localhost:3000/actual.ics`
 
 All configuration is done through environment variables.
 
-|Name|Description|Required|Default|
-|---|---|---|---|
-|ACTUAL_SERVER|The server to use when connecting to the Actual API|true||
-|ACTUAL_MAIN_PASSWORD|The password to use when connecting to the Actual API|true||
-|ACTUAL_SYNC_ID|The sync ID to use when connecting to the Actual API. Find this ID in Settings > Advanced Settings > Sync ID|true||
-|SYNC_ID_AS_URL|Set to `true` to use the sync ID as part of the URL to make it safer to expose publicly, just like Google Calendar does|false||
-|ACTUAL_SYNC_PASSWORD|The sync password|false||
-|ACTUAL_PATH|The path to store Actual cache data. The container must have write access to this path.|false|`.actual-cache`|
-|TZ|The timezone to use on ical data|false|UTC|
-|PORT|The port to listen on|false|3000|
-|LOCALE|The locale to use when formatting amounts|false|en-US|
-|CURRENCY|The currency to use when formatting amounts. Values must be one of [these](https://en.wikipedia.org/wiki/ISO_4217#List_of_ISO_4217_currency_codes)|false|USD|
-|LOG_LEVEL|The log level to use. `trace`, `debug`, `info`, `warn`, `error` or `fatal`|false|`info`|
+| Name                 | Description                                                                                                                                        | Required | Default         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------- |
+| ACTUAL_SERVER        | The server to use when connecting to the Actual API                                                                                                | true     |                 |
+| ACTUAL_MAIN_PASSWORD | The password to use when connecting to the Actual API                                                                                              | true     |                 |
+| ACTUAL_SYNC_ID       | The sync ID to use when connecting to the Actual API. Find this ID in Settings > Advanced Settings > Sync ID                                       | true     |                 |
+| SYNC_ID_AS_URL       | Set to `true` to use the sync ID as part of the URL to make it safer to expose publicly, just like Google Calendar does                            | false    |                 |
+| ACTUAL_SYNC_PASSWORD | The sync password                                                                                                                                  | false    |                 |
+| ACTUAL_PATH          | The path to store Actual cache data. The container must have write access to this path.                                                            | false    | `.actual-cache` |
+| CLEAR_CACHE_ON_ERROR | Automatically clear the cache directory when migration sync errors are detected and retry. Set to `false` to disable.                              | false    | `true`          |
+| TZ                   | The timezone to use on ical data                                                                                                                   | false    | UTC             |
+| PORT                 | The port to listen on                                                                                                                              | false    | 3000            |
+| LOCALE               | The locale to use when formatting amounts                                                                                                          | false    | en-US           |
+| CURRENCY             | The currency to use when formatting amounts. Values must be one of [these](https://en.wikipedia.org/wiki/ISO_4217#List_of_ISO_4217_currency_codes) | false    | USD             |
+| LOG_LEVEL            | The log level to use. `trace`, `debug`, `info`, `warn`, `error` or `fatal`                                                                         | false    | `info`          |
 
 ## Hosting it publicly
 

@@ -31,8 +31,11 @@ app.get(resolvePath(), async (_req, res) => {
 
     res.send(iCalString)
   } catch (err) {
-    logger.error(err)
-    res.status(500).send('Internal server error')
+    logger.error({ err, errorMessage: err instanceof Error ? err.message : String(err) }, 'Error generating iCal')
+    res.status(500).json({
+      error: 'Internal server error',
+      message: err instanceof Error ? err.message : String(err),
+    })
   }
 })
 

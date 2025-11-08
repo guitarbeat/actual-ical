@@ -4,7 +4,7 @@ import { RRule } from 'rrule'
 import { DateTime, DurationLikeObject } from 'luxon'
 import { RecurConfig, ScheduleEntity } from '@actual-app/api/@types/loot-core/src/types/models'
 import { formatCurrency } from './helpers/number'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import logger from './helpers/logger'
 
 const {
@@ -14,6 +14,7 @@ const {
   ACTUAL_SYNC_PASSWORD,
   ACTUAL_PATH = '.actual-cache',
   TZ = 'UTC',
+  CLEAR_CACHE_ON_ERROR = 'true',
 } = process.env
 
 if (!ACTUAL_SERVER || !ACTUAL_MAIN_PASSWORD || !ACTUAL_SYNC_ID) {
@@ -27,32 +28,73 @@ process.on('uncaughtException', (error) => {
   logger.error('Unhandled exception', error)
 })
 
-const getSchedules = async () => {
-  if (!existsSync(ACTUAL_PATH)) {
-    logger.debug('Creating directory:', ACTUAL_PATH)
-    mkdirSync(ACTUAL_PATH)
+const clearCache = () => {
+  if (existsSync(ACTUAL_PATH)) {
+    logger.warn({ cachePath: ACTUAL_PATH }, 'Clearing corrupted cache directory')
+    try {
+      rmSync(ACTUAL_PATH, { recursive: true, force: true })
+      logger.info('Cache directory cleared successfully')
+    } catch (clearError) {
+      logger.error({ clearError }, 'Failed to clear cache directory')
+      throw clearError
+    }
   }
+  mkdirSync(ACTUAL_PATH, { recursive: true })
+}
 
-  await actualApi.init({
-    dataDir: ACTUAL_PATH,
-    serverURL: ACTUAL_SERVER,
-    password: ACTUAL_MAIN_PASSWORD,
-  })
+const getSchedules = async (retryOnMigrationError = true) => {
+  try {
+    if (!existsSync(ACTUAL_PATH)) {
+      logger.debug('Creating directory:', ACTUAL_PATH)
+      mkdirSync(ACTUAL_PATH, { recursive: true })
+    }
 
-  await actualApi.downloadBudget(ACTUAL_SYNC_ID, {
-    password: ACTUAL_SYNC_PASSWORD,
-  })
-
-  const query = actualApi.q('schedules')
-    .filter({
-      completed: false,
-      tombstone: false,
+    logger.debug({ serverURL: ACTUAL_SERVER, syncId: ACTUAL_SYNC_ID }, 'Initializing Actual API')
+    await actualApi.init({
+      dataDir: ACTUAL_PATH,
+      serverURL: ACTUAL_SERVER,
+      password: ACTUAL_MAIN_PASSWORD,
     })
-    .select(['*'])
 
-  const { data } = await actualApi.runQuery(query) as { data: ScheduleEntity[] }
+    logger.debug('Downloading budget')
+    await actualApi.downloadBudget(ACTUAL_SYNC_ID, {
+      password: ACTUAL_SYNC_PASSWORD,
+    })
 
-  return data
+    logger.debug('Querying schedules')
+    const query = actualApi.q('schedules')
+      .filter({
+        completed: false,
+        tombstone: false,
+      })
+      .select(['*'])
+
+    const { data } = await actualApi.runQuery(query) as { data: ScheduleEntity[] }
+
+    return data
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const isMigrationError = errorMessage.includes('out-of-sync-migrations') || 
+                            errorMessage.includes('migration') ||
+                            errorMessage.includes('timestamp')
+
+    logger.error({ 
+      error, 
+      errorMessage,
+      isMigrationError,
+      retryOnMigrationError,
+      clearCacheOnError: CLEAR_CACHE_ON_ERROR,
+    }, 'Error fetching schedules')
+
+    // * If it's a migration error and we haven't retried yet, clear cache and retry
+    if (isMigrationError && retryOnMigrationError && CLEAR_CACHE_ON_ERROR === 'true') {
+      logger.warn('Migration sync error detected, clearing cache and retrying...')
+      clearCache()
+      return getSchedules(false)
+    }
+
+    throw new Error(`Failed to fetch schedules: ${errorMessage}`)
+  }
 }
 
 const resolveFrequency = (frequency: string) => {
@@ -86,7 +128,7 @@ export const generateIcal = async () => {
   // A method is required for outlook to display event as an invitation
   calendar.method(ICalCalendarMethod.REQUEST)
 
-  schedules.forEach((schedule) => {
+  for (const schedule of schedules) {
     logger.debug(schedule, 'Processing Schedule')
     const recurringData = schedule._date
     const nextDate = DateTime.fromISO(schedule.next_date)
@@ -180,12 +222,13 @@ export const generateIcal = async () => {
     if (!recurringData.frequency) {
       logger.debug(`Generating single event for ${schedule.name}`)
 
-      return calendar.createEvent({
+      calendar.createEvent({
         start: nextDate.toJSDate(),
         summary: `${schedule.name} (${formatAmount()})`,
         allDay: true,
         timezone: TZ,
       })
+      continue
     }
 
     // Only create RRule for recurring schedules
@@ -227,7 +270,7 @@ export const generateIcal = async () => {
       throw new Error('Invalid weekendSolveMode')
     }
 
-    return rule.all()
+    rule.all()
       .filter((date) => {
         return DateTime.fromJSDate(date) >= nextDate
       })
@@ -239,7 +282,7 @@ export const generateIcal = async () => {
           timezone: TZ,
         })
       })
-  })
+  }
 
   return calendar.toString()
 }
