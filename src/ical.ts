@@ -6,6 +6,25 @@ import { RecurConfig, ScheduleEntity } from '@actual-app/api/@types/loot-core/sr
 import { formatCurrency } from './helpers/number'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import logger from './helpers/logger'
+import { resolveFrequency } from './helpers/rrule'
+
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Operation timed out after ${ms}ms`))
+    }, ms)
+
+    promise
+      .then(res => {
+        clearTimeout(timeoutId)
+        resolve(res)
+      })
+      .catch(err => {
+        clearTimeout(timeoutId)
+        reject(err)
+      })
+  })
+}
 
 const {
   ACTUAL_SERVER,
@@ -196,10 +215,15 @@ const getSchedules = async (retryOnMigrationError = true) => {
     logger.debug('Actual API initialized successfully')
 
     logger.info('Downloading budget data...')
-    await actualApi.downloadBudget(ACTUAL_SYNC_ID, {
-      password: ACTUAL_SYNC_PASSWORD,
-    })
-    logger.debug('Budget downloaded successfully')
+    try {
+      await withTimeout(actualApi.downloadBudget(ACTUAL_SYNC_ID, {
+        password: ACTUAL_SYNC_PASSWORD,
+      }), 30000)
+      logger.debug('Budget downloaded successfully')
+    } catch (e) {
+      logger.error(e, 'Error downloading budget')
+      throw e
+    }
 
     logger.debug('Querying schedules from database')
     const query = actualApi.q('schedules')
@@ -287,21 +311,6 @@ const getSchedules = async (retryOnMigrationError = true) => {
   }
 }
 
-const resolveFrequency = (frequency: string) => {
-  switch (frequency) {
-    case 'yearly':
-      return RRule.YEARLY
-    case 'monthly':
-      return RRule.MONTHLY
-    case 'weekly':
-      return RRule.WEEKLY
-    case 'daily':
-      return RRule.DAILY
-    default:
-      throw new Error(`Invalid frequency: ${frequency}`)
-  }
-}
-
 export const generateIcal = async () => {
   const schedules = await getSchedules()
   const today = DateTime.now()
@@ -320,14 +329,7 @@ export const generateIcal = async () => {
 
   // * If no schedules, add a placeholder event to make the calendar valid and informative
   if (schedules.length === 0) {
-    calendar.createEvent({
-      start: today.toJSDate(),
-      summary: 'No scheduled transactions found',
-      description: 'You don\'t have any active scheduled transactions in Actual. Add some schedules in Actual to see them here.',
-      allDay: true,
-      timezone: TZ,
-    })
-    return { calendarString: calendar.toString(), scheduleCount: 0 }
+    return createPlaceholderEvent(calendar)
   }
 
   for (const schedule of schedules) {
@@ -487,4 +489,15 @@ export const generateIcal = async () => {
   }
 
   return { calendarString: calendar.toString(), scheduleCount: schedules.length }
+}
+
+function createPlaceholderEvent(calendar: ICalCalendar) {
+  calendar.createEvent({
+    start: new Date(),
+    summary: 'No scheduled transactions found',
+    description: 'You don\'t have any active scheduled transactions in Actual. Add some schedules in Actual to see them here.',
+    allDay: true,
+    timezone: process.env.TZ || 'UTC',
+  })
+  return { calendarString: calendar.toString(), scheduleCount: 0 }
 }

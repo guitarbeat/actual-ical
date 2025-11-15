@@ -5,6 +5,7 @@ import logger from './helpers/logger'
 const {
   SYNC_ID_AS_URL,
   ACTUAL_SYNC_ID,
+  BUDGET_ID,
 } = process.env
 
 const app = express()
@@ -13,7 +14,7 @@ app.disable('x-powered-by')
 
 const resolvePath = () => {
   if (SYNC_ID_AS_URL === 'true') {
-    const urlPath = `/${ACTUAL_SYNC_ID}.ics`
+    const urlPath = `/${BUDGET_ID || ACTUAL_SYNC_ID}.ics`
     logger.debug({ urlPath }, 'Using SyncID as URL')
 
     return urlPath
