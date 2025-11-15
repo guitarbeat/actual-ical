@@ -21,4 +21,4 @@ COPY --from=builder /app/dist ./dist
 
 EXPOSE ${PORT:-3000}
 
-CMD ["node", "dist/bin/server.js"]
+CMD ["node", "-r", "./dist/bin/pre-start.js", "dist/bin/server.js"]
